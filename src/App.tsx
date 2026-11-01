@@ -130,13 +130,6 @@ export const App: React.FC = () => {
     setPinInfos(mcuRef.current.getAllPinInfos());
   }, [components, wires]);
 
-  // Subscribe to MCU pin changes
-  useEffect(() => {
-    mcuRef.current.subscribePinChange((pins) => {
-      setPinInfos([...pins]);
-    });
-  }, []);
-
   // Compile & Upload Routine
   const handleCompile = useCallback(async () => {
     setIsCompiling(true);
@@ -229,7 +222,15 @@ export const App: React.FC = () => {
     setWires(proj.wires);
     setIsRunning(false);
     mcuRef.current.reset();
+    engineRef.current.reset();
     engineRef.current.setComponentsAndWires(proj.components, proj.wires);
+    engineRef.current.updateCircuit();
+    setPinInfos(mcuRef.current.getAllPinInfos());
+    const clonedLcd = new Map<string, Lcd1602State>();
+    for (const [id, st] of engineRef.current.lcdStates.entries()) {
+      clonedLcd.set(id, { ...st, lines: [st.lines[0], st.lines[1]] });
+    }
+    setLcdStates(clonedLcd);
     if (proj.precompiledHex) {
       const parsed = parseIntelHex(proj.precompiledHex);
       mcuRef.current.loadProgram(parsed.progMem);
@@ -309,7 +310,15 @@ export const App: React.FC = () => {
     setSimSpeed(1);
     setIsRunning(false);
     mcuRef.current.reset();
+    engineRef.current.reset();
     engineRef.current.setComponentsAndWires(def.components, def.wires);
+    engineRef.current.updateCircuit();
+    setPinInfos(mcuRef.current.getAllPinInfos());
+    const clonedLcd = new Map<string, Lcd1602State>();
+    for (const [id, st] of engineRef.current.lcdStates.entries()) {
+      clonedLcd.set(id, { ...st, lines: [st.lines[0], st.lines[1]] });
+    }
+    setLcdStates(clonedLcd);
     setIsResetModalOpen(false);
     showToast('Reset to Factory Default (LED Blinker)');
   };
@@ -322,7 +331,15 @@ export const App: React.FC = () => {
     setWires(currentProject.wires);
     setIsRunning(false);
     mcuRef.current.reset();
+    engineRef.current.reset();
     engineRef.current.setComponentsAndWires(currentProject.components, currentProject.wires);
+    engineRef.current.updateCircuit();
+    setPinInfos(mcuRef.current.getAllPinInfos());
+    const clonedLcd = new Map<string, Lcd1602State>();
+    for (const [id, st] of engineRef.current.lcdStates.entries()) {
+      clonedLcd.set(id, { ...st, lines: [st.lines[0], st.lines[1]] });
+    }
+    setLcdStates(clonedLcd);
     setIsResetModalOpen(false);
     showToast(`Reset to ${currentProject.title} preset`);
   };
@@ -345,7 +362,11 @@ export const App: React.FC = () => {
     setLedStates(new Map(engineRef.current.ledStates));
     setLedBarStates(new Map(engineRef.current.ledBarStates));
     setSegStates(new Map(engineRef.current.segStates));
-    setLcdStates(new Map(engineRef.current.lcdStates));
+    const clonedLcd = new Map<string, Lcd1602State>();
+    for (const [id, st] of engineRef.current.lcdStates.entries()) {
+      clonedLcd.set(id, { ...st, lines: [st.lines[0], st.lines[1]] });
+    }
+    setLcdStates(clonedLcd);
     setBuzzerActive(new Map(engineRef.current.buzzerActive));
     setDcMotorStates(new Map(engineRef.current.dcMotorStates));
     setStepperStates(new Map(engineRef.current.stepperStates));
@@ -355,9 +376,21 @@ export const App: React.FC = () => {
   const handleReset = useCallback(() => {
     setIsRunning(false);
     mcuRef.current.reset();
+    engineRef.current.reset();
     engineRef.current.updateCircuit();
     setCpuState(mcuRef.current.getCpuState());
     setPinInfos(mcuRef.current.getAllPinInfos());
+    setLedStates(new Map(engineRef.current.ledStates));
+    setLedBarStates(new Map(engineRef.current.ledBarStates));
+    setSegStates(new Map(engineRef.current.segStates));
+    const clonedLcd = new Map<string, Lcd1602State>();
+    for (const [id, st] of engineRef.current.lcdStates.entries()) {
+      clonedLcd.set(id, { ...st, lines: [st.lines[0], st.lines[1]] });
+    }
+    setLcdStates(clonedLcd);
+    setBuzzerActive(new Map(engineRef.current.buzzerActive));
+    setDcMotorStates(new Map(engineRef.current.dcMotorStates));
+    setStepperStates(new Map(engineRef.current.stepperStates));
   }, []);
 
   // Continuous Simulation Loop via requestAnimationFrame
@@ -386,10 +419,15 @@ export const App: React.FC = () => {
 
       // Update UI state snapshots
       setCpuState(mcuRef.current.getCpuState());
+      setPinInfos(mcuRef.current.getAllPinInfos());
       setLedStates(new Map(engineRef.current.ledStates));
       setLedBarStates(new Map(engineRef.current.ledBarStates));
       setSegStates(new Map(engineRef.current.segStates));
-      setLcdStates(new Map(engineRef.current.lcdStates));
+      const clonedLcd = new Map<string, Lcd1602State>();
+      for (const [id, st] of engineRef.current.lcdStates.entries()) {
+        clonedLcd.set(id, { ...st, lines: [st.lines[0], st.lines[1]] });
+      }
+      setLcdStates(clonedLcd);
       setBuzzerActive(new Map(engineRef.current.buzzerActive));
       setDcMotorStates(new Map(engineRef.current.dcMotorStates));
       setStepperStates(new Map(engineRef.current.stepperStates));

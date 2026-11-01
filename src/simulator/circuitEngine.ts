@@ -34,6 +34,30 @@ export interface StepperMotorState {
   lastStepPattern: number;
 }
 
+// Fast terminal binding for edge-triggered peripherals
+export interface LcdTerminalBinding {
+  type: 'mcu' | 'vcc' | 'gnd' | 'none';
+  port?: 'A' | 'B' | 'C' | 'D';
+  bit?: number;
+}
+
+export interface FastLcdBinding {
+  comp: CircuitComponent;
+  rs: LcdTerminalBinding;
+  e: LcdTerminalBinding;
+  d: [
+    LcdTerminalBinding,
+    LcdTerminalBinding,
+    LcdTerminalBinding,
+    LcdTerminalBinding,
+    LcdTerminalBinding,
+    LcdTerminalBinding,
+    LcdTerminalBinding,
+    LcdTerminalBinding
+  ];
+  is8Bit: boolean;
+}
+
 // DC Motor Live State
 export interface DcMotorState {
   speed: number;     // 0.0 to 1.0
@@ -191,17 +215,185 @@ export class CircuitEngine {
   public stepperStates: Map<string, StepperMotorState> = new Map();
   public buzzerActive: Map<string, boolean> = new Map();
 
+  // Fast pre-resolved hardware bindings for edge-triggered LCD updates
+  private lcdBindings: FastLcdBinding[] = [];
+
   constructor(mcu: Atmega16Simulator) {
     this.mcu = mcu;
+    // Synchronously process fast edge-triggered peripherals (LCD E-pulse) on every MCU port write
+    this.mcu.subscribePortWrite((portName) => {
+      this.syncFastPeripherals(portName);
+    });
+  }
+
+  private resolveTerminalBinding(compId: string, termId: string): LcdTerminalBinding {
+    const wire = this.wires.find(
+      (w) =>
+        (w.toCompId === compId && w.toTermId === termId) ||
+        (w.fromCompId === compId && w.fromTermId === termId)
+    );
+    if (!wire) return { type: 'none' };
+
+    const otherComp = wire.toCompId === compId ? wire.fromCompId : wire.toCompId;
+    const otherTerm = wire.toCompId === compId ? wire.fromTermId : wire.toTermId;
+
+    if (otherComp === 'atmega16') {
+      const match = otherTerm.match(/^P([ABCD])([0-7])$/);
+      if (match) {
+        return {
+          type: 'mcu',
+          port: match[1] as 'A' | 'B' | 'C' | 'D',
+          bit: parseInt(match[2], 10),
+        };
+      }
+    } else if (otherComp === 'vcc' || otherTerm === 'vcc') {
+      return { type: 'vcc' };
+    } else if (otherComp === 'gnd' || otherTerm === 'gnd') {
+      return { type: 'gnd' };
+    }
+    return { type: 'none' };
+  }
+
+  private getBindingVoltage(binding: LcdTerminalBinding): number {
+    if (binding.type === 'mcu') {
+      return this.mcu.getPortPinVoltage(binding.port!, binding.bit!);
+    }
+    if (binding.type === 'vcc') return 5.0;
+    return 0.0;
+  }
+
+  public rebuildLcdBindings() {
+    this.lcdBindings = [];
+
+    for (const comp of this.components) {
+      if (comp.type === 'lcd1602') {
+        const hasLowerBitsWired = this.wires.some(
+          (w) =>
+            (w.toCompId === comp.id && ['d0', 'd1', 'd2', 'd3'].includes(w.toTermId)) ||
+            (w.fromCompId === comp.id && ['d0', 'd1', 'd2', 'd3'].includes(w.fromTermId))
+        );
+
+        const is8Bit = hasLowerBitsWired || comp.props?.is8BitMode === true;
+
+        if (!this.lcdStates.has(comp.id)) {
+          this.lcdStates.set(comp.id, {
+            lines: ['                ', '                '],
+            cursorRow: 0,
+            cursorCol: 0,
+            displayOn: true,
+            nibbleBuffer: null,
+            lastE: false,
+            backlight: true,
+            initialized: false,
+            is8BitMode: is8Bit,
+          });
+        } else {
+          const state = this.lcdStates.get(comp.id)!;
+          state.is8BitMode = is8Bit;
+        }
+
+        const binding: FastLcdBinding = {
+          comp,
+          rs: this.resolveTerminalBinding(comp.id, 'rs'),
+          e: this.resolveTerminalBinding(comp.id, 'e'),
+          d: [
+            this.resolveTerminalBinding(comp.id, 'd0'),
+            this.resolveTerminalBinding(comp.id, 'd1'),
+            this.resolveTerminalBinding(comp.id, 'd2'),
+            this.resolveTerminalBinding(comp.id, 'd3'),
+            this.resolveTerminalBinding(comp.id, 'd4'),
+            this.resolveTerminalBinding(comp.id, 'd5'),
+            this.resolveTerminalBinding(comp.id, 'd6'),
+            this.resolveTerminalBinding(comp.id, 'd7'),
+          ],
+          is8Bit,
+        };
+        this.lcdBindings.push(binding);
+      }
+
+      if (comp.type === 'led-bar' && !this.ledBarStates.has(comp.id)) {
+        this.ledBarStates.set(comp.id, [false, false, false, false, false, false, false, false]);
+      }
+    }
   }
 
   public setComponentsAndWires(components: CircuitComponent[], wires: WireConnection[]) {
     this.components = components;
     this.wires = wires;
+    this.rebuildLcdBindings();
+  }
 
-    // Initialize LCD states if any
-    for (const comp of components) {
-      if (comp.type === 'lcd1602' && !this.lcdStates.has(comp.id)) {
+  public syncFastPeripherals(_portName?: 'A' | 'B' | 'C' | 'D'): void {
+    for (let i = 0; i < this.lcdBindings.length; i++) {
+      const binding = this.lcdBindings[i];
+      const lcd = this.lcdStates.get(binding.comp.id);
+      if (!lcd) continue;
+
+      const eHigh = this.getBindingVoltage(binding.e) > 2.0;
+
+      // Enable Falling Edge: E transitions from HIGH (1) to LOW (0)
+      if (lcd.lastE && !eHigh) {
+        const rs = this.getBindingVoltage(binding.rs) > 2.0;
+        const is8Bit = binding.is8Bit || lcd.is8BitMode === true;
+
+        if (is8Bit) {
+          const d0 = this.getBindingVoltage(binding.d[0]) > 2.0 ? 1 : 0;
+          const d1 = this.getBindingVoltage(binding.d[1]) > 2.0 ? 1 : 0;
+          const d2 = this.getBindingVoltage(binding.d[2]) > 2.0 ? 1 : 0;
+          const d3 = this.getBindingVoltage(binding.d[3]) > 2.0 ? 1 : 0;
+          const d4 = this.getBindingVoltage(binding.d[4]) > 2.0 ? 1 : 0;
+          const d5 = this.getBindingVoltage(binding.d[5]) > 2.0 ? 1 : 0;
+          const d6 = this.getBindingVoltage(binding.d[6]) > 2.0 ? 1 : 0;
+          const d7 = this.getBindingVoltage(binding.d[7]) > 2.0 ? 1 : 0;
+
+          const byteVal =
+            (d7 << 7) | (d6 << 6) | (d5 << 5) | (d4 << 4) | (d3 << 3) | (d2 << 2) | (d1 << 1) | d0;
+          this.executeLcdByte(lcd, rs, byteVal);
+        } else {
+          // 4-bit bus mode (D4..D7)
+          const d4 = this.getBindingVoltage(binding.d[4]) > 2.0 ? 1 : 0;
+          const d5 = this.getBindingVoltage(binding.d[5]) > 2.0 ? 1 : 0;
+          const d6 = this.getBindingVoltage(binding.d[6]) > 2.0 ? 1 : 0;
+          const d7 = this.getBindingVoltage(binding.d[7]) > 2.0 ? 1 : 0;
+
+          const nibble = (d7 << 3) | (d6 << 2) | (d5 << 1) | d4;
+
+          if (!rs && lcd.nibbleBuffer === null && !lcd.initialized && (nibble === 0x02 || nibble === 0x03)) {
+            if (nibble === 0x02) {
+              lcd.initialized = true;
+            }
+            lcd.nibbleBuffer = null;
+          } else if (lcd.nibbleBuffer === null) {
+            lcd.nibbleBuffer = nibble;
+          } else {
+            const byteVal = (lcd.nibbleBuffer << 4) | nibble;
+            lcd.nibbleBuffer = null;
+            lcd.initialized = true;
+            this.executeLcdByte(lcd, rs, byteVal);
+          }
+        }
+      }
+
+      lcd.lastE = eHigh;
+    }
+  }
+
+  public reset(): void {
+    this.ledStates.clear();
+    this.ledBarStates.clear();
+    this.segStates.clear();
+    this.motorSpeeds.clear();
+    this.dcMotorStates.clear();
+    this.stepperStates.clear();
+    this.buzzerActive.clear();
+
+    for (const comp of this.components) {
+      if (comp.type === 'lcd1602') {
+        const hasLowerBitsWired = this.wires.some(
+          (w) =>
+            (w.toCompId === comp.id && ['d0', 'd1', 'd2', 'd3'].includes(w.toTermId)) ||
+            (w.fromCompId === comp.id && ['d0', 'd1', 'd2', 'd3'].includes(w.fromTermId))
+        );
         this.lcdStates.set(comp.id, {
           lines: ['                ', '                '],
           cursorRow: 0,
@@ -210,12 +402,12 @@ export class CircuitEngine {
           nibbleBuffer: null,
           lastE: false,
           backlight: true,
+          initialized: false,
+          is8BitMode: hasLowerBitsWired || comp.props?.is8BitMode === true,
         });
       }
-      if (comp.type === 'led-bar' && !this.ledBarStates.has(comp.id)) {
-        this.ledBarStates.set(comp.id, [false, false, false, false, false, false, false, false]);
-      }
     }
+    this.rebuildLcdBindings();
   }
 
   /**
@@ -500,7 +692,9 @@ export class CircuitEngine {
       const c = lcd.cursorCol;
       const lineArr = lcd.lines[r].split('');
       lineArr[c] = char;
-      lcd.lines[r] = lineArr.join('');
+      const newLines: [string, string] = [lcd.lines[0], lcd.lines[1]];
+      newLines[r] = lineArr.join('');
+      lcd.lines = newLines;
 
       lcd.cursorCol = (c + 1) % 16;
       if (lcd.cursorCol === 0) {

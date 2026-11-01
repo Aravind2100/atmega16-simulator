@@ -131,6 +131,8 @@ export class Atmega16Simulator {
 
   // Callback notified when pins change
   private onPinChangeCallbacks: Array<(pins: AtmegaPinInfo[]) => void> = [];
+  // Synchronous callbacks notified immediately when any port register is written
+  private onPortWriteCallbacks: Array<(portName: 'A' | 'B' | 'C' | 'D') => void> = [];
 
   constructor(progMem?: Uint16Array) {
     const memory = progMem || new Uint16Array(8192); // 16KB ATmega16 flash
@@ -175,6 +177,9 @@ export class Atmega16Simulator {
     // Listeners for GPIO updates
     const notifyChange = (portName: 'A' | 'B' | 'C' | 'D') => {
       this.syncPortPullUps(portName);
+      for (let i = 0; i < this.onPortWriteCallbacks.length; i++) {
+        this.onPortWriteCallbacks[i](portName);
+      }
       if (this.onPinChangeCallbacks.length > 0) {
         const pinInfos = this.getAllPinInfos();
         for (const cb of this.onPinChangeCallbacks) {
@@ -239,6 +244,70 @@ export class Atmega16Simulator {
 
   public subscribePinChange(cb: (pins: AtmegaPinInfo[]) => void) {
     this.onPinChangeCallbacks.push(cb);
+  }
+
+  public subscribePortWrite(cb: (portName: 'A' | 'B' | 'C' | 'D') => void) {
+    this.onPortWriteCallbacks.push(cb);
+  }
+
+  /**
+   * Fast O(1) voltage check for a specific port bit without allocating objects
+   */
+  public getPortPinVoltage(port: 'A' | 'B' | 'C' | 'D', bit: number): number {
+    const ddrAddr =
+      port === 'A'
+        ? ATMEGA16_ADDR.DDRA
+        : port === 'B'
+        ? ATMEGA16_ADDR.DDRB
+        : port === 'C'
+        ? ATMEGA16_ADDR.DDRC
+        : ATMEGA16_ADDR.DDRD;
+    const portAddr =
+      port === 'A'
+        ? ATMEGA16_ADDR.PORTA
+        : port === 'B'
+        ? ATMEGA16_ADDR.PORTB
+        : port === 'C'
+        ? ATMEGA16_ADDR.PORTC
+        : ATMEGA16_ADDR.PORTD;
+
+    const ddr = this.cpu.data[ddrAddr];
+    const portVal = this.cpu.data[portAddr];
+
+    if (ddr & (1 << bit)) {
+      // Output active: Driven HIGH or LOW
+      return (portVal & (1 << bit)) ? 5.0 : 0.0;
+    }
+
+    // Input pin: check internal pull-up
+    const pud = !!(this.cpu.data[ATMEGA16_ADDR.SFIOR] & 0x04);
+    if ((portVal & (1 << bit)) && !pud) {
+      return 5.0;
+    }
+
+    // Floating / external input
+    const pinAddr =
+      port === 'A'
+        ? ATMEGA16_ADDR.PINA
+        : port === 'B'
+        ? ATMEGA16_ADDR.PINB
+        : port === 'C'
+        ? ATMEGA16_ADDR.PINC
+        : ATMEGA16_ADDR.PIND;
+    return (this.cpu.data[pinAddr] & (1 << bit)) ? 5.0 : 0.0;
+  }
+
+  /**
+   * Fast lookup for a named pin ('PB1', 'PA0', 'VCC', 'GND')
+   */
+  public getPinVoltageByName(name: string): number {
+    if (name === 'VCC' || name === 'AVCC' || name === 'AREF' || name === 'RESET') return 5.0;
+    if (name === 'GND') return 0.0;
+    const match = name.match(/^P([ABCD])([0-7])$/);
+    if (match) {
+      return this.getPortPinVoltage(match[1] as 'A' | 'B' | 'C' | 'D', parseInt(match[2], 10));
+    }
+    return 0.0;
   }
 
   public setAnalogInput(channel: number, voltage: number) {
