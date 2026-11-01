@@ -411,14 +411,14 @@ export const App: React.FC = () => {
       lastTime = time;
 
       // Instructions per frame:
-      // In realtime (simSpeed === 1), clockSpeed (e.g. 8MHz) -> 8,000 instructions per ms.
-      // In slow motion (simSpeed === 100), run fewer instructions per frame.
+      // In realtime (simSpeed === 1), clockSpeed (e.g. 8MHz) -> 8,000 instructions per ms (~130k instructions per frame).
+      // Capped at 60,000 instructions/frame for silky smooth 60 FPS animation across all devices.
       const instructionsToRun =
         simSpeed === 1
-          ? Math.max(100, Math.round((clockSpeed / 1000) * (dt / 10)))
+          ? Math.max(100, Math.min(60000, Math.round((clockSpeed / 1000) * dt)))
           : simSpeed === 20
-          ? 50
-          : 1;
+          ? Math.max(20, Math.round((clockSpeed / 1000) * (dt / 15)))
+          : 50;
 
       mcuRef.current.stepCount(instructionsToRun);
       engineRef.current.updateCircuit();
@@ -445,9 +445,23 @@ export const App: React.FC = () => {
     return () => cancelAnimationFrame(animId);
   }, [isRunning, clockSpeed, simSpeed]);
 
-  // Auto-compile initial project on load
+  // Load initial preset firmware into ATmega16 Flash memory immediately on mount
   useEffect(() => {
-    handleCompile();
+    if (currentProject.precompiledHex) {
+      const parsed = parseIntelHex(currentProject.precompiledHex);
+      mcuRef.current.loadProgram(parsed.progMem);
+      setDisassembly(currentProject.precompiledDisassembly || '');
+      setFlashUsed(currentProject.flashUsed || parsed.bytesUsed);
+      setSramUsed(currentProject.sramUsed || 0);
+      setBuildLogs(
+        `Preset ready: ${currentProject.title} (${
+          currentProject.flashUsed || parsed.bytesUsed
+        } bytes Flash).\nFirmware loaded in ATmega16 memory. Click "Run" to simulate in real-time!`
+      );
+      setCpuState(mcuRef.current.getCpuState());
+    } else {
+      handleCompile();
+    }
   }, []);
 
   // Resizable split-pane handlers
