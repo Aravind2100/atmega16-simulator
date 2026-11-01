@@ -164,6 +164,12 @@ export const App: React.FC = () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ code, language: 'c', fCpu: clockSpeed }),
           });
+
+          const contentType = res.headers.get('content-type') || '';
+          if (!res.ok || !contentType.includes('application/json')) {
+            throw new Error(`Compiler API unavailable on static host (HTTP ${res.status})`);
+          }
+
           const data = await res.json();
 
           if (data.success && data.hex) {
