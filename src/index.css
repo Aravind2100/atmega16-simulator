@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #020617;
+    color: #f8fafc;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090d16;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* CodeMirror custom styling */
+.cm-editor {
+  height: 100% !important;
+  font-size: 12px !important;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace !important;
+  background-color: #090d16 !important;
+}
+
+.cm-scroller {
+  font-family: inherit !important;
+}
+
+.cm-gutters {
+  background-color: #050811 !important;
+  border-right: 1px solid #1e293b !important;
+  color: #475569 !important;
+}
+
+.cm-activeLine {
+  background-color: rgba(30, 41, 59, 0.4) !important;
+}
+
+.cm-activeLineGutter {
+  background-color: #1e293b !important;
+  color: #94a3b8 !important;
+}
